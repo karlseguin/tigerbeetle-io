@@ -243,6 +243,59 @@ pub const IO = struct {
 
     fn submit(
         self: *IO,
+        context: anytype,
+        comptime callback: anytype,
+        completion: *Completion,
+        comptime operation_tag: std.meta.Tag(Operation),
+        operation_data: anytype,
+        comptime OperationImpl: type,
+    ) void {
+        const onCompleteFn = struct {
+            fn onComplete(io: *IO, _completion: *Completion) void {
+                // Perform the actual operation
+                const op_data = &@field(_completion.operation, @tagName(operation_tag));
+                const result = OperationImpl.do_operation(op_data);
+
+                // Requeue onto io_pending if error.WouldBlock
+                switch (operation_tag) {
+                    .accept, .connect, .read, .write, .send, .recv => {
+                        _ = result catch |err| switch (err) {
+                            error.WouldBlock => {
+                                _completion.next = null;
+                                io.io_pending.push(_completion);
+                                return;
+                            },
+                            else => {},
+                        };
+                    },
+                    else => {},
+                }
+
+                // Complete the Completion
+
+                return callback(
+                    @ptrCast(@alignCast(_completion.context)),
+                    _completion,
+                    result,
+                );
+            }
+        }.onComplete;
+
+        completion.* = .{
+            .next = null,
+            .context = context,
+            .callback = onCompleteFn,
+            .operation = @unionInit(Operation, @tagName(operation_tag), operation_data),
+        };
+
+        switch (operation_tag) {
+            .timeout => self.timeouts.push(completion),
+            else => self.completed.push(completion),
+        }
+    }
+
+    fn submitWithConfig(
+        self: *IO,
         comptime config: anytype,
         context: anytype,
         comptime callback: anytype,
@@ -670,7 +723,7 @@ pub const IO = struct {
             return;
         }
 
-        self.submit(
+        self.submitWithConfig(
             config,
             context,
             callback,
