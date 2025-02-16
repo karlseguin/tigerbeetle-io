@@ -43,11 +43,12 @@ pub const IO = struct {
     /// Pass all queued submissions to the kernel and run for `nanoseconds`.
     /// The `nanoseconds` argument is a u63 to allow coercion to the i64 used
     /// in the __kernel_timespec struct.
-    pub fn run_for_ns(self: *IO, nanoseconds: u63) !void {
+    pub fn run_for_ns(self: *IO, comptime config: anytype, nanoseconds: u63) !void {
         var timed_out = false;
         var completion: Completion = undefined;
         const on_timeout = struct {
             fn callback(
+                comptime _: anytype,
                 timed_out_ptr: *bool,
                 _completion: *Completion,
                 result: TimeoutError!void,
@@ -61,6 +62,7 @@ pub const IO = struct {
 
         // Submit a timeout which sets the timed_out value to true to terminate the loop below.
         self.timeout(
+            config,
             *bool,
             &timed_out,
             on_timeout,
@@ -241,6 +243,7 @@ pub const IO = struct {
 
     fn submit(
         self: *IO,
+        comptime config: anytype,
         context: anytype,
         comptime callback: anytype,
         completion: *Completion,
@@ -272,6 +275,7 @@ pub const IO = struct {
                 // Complete the Completion
 
                 return callback(
+                    config,
                     @ptrCast(@alignCast(_completion.context)),
                     _completion,
                     result,
@@ -296,9 +300,11 @@ pub const IO = struct {
 
     pub fn cancel_one(
         self: *IO,
+        comptime config: anytype,
         comptime Context: type,
         context: Context,
         comptime callback: fn (
+            comptime config: anytype,
             context: Context,
             completion: *Completion,
             result: CancelOneError!void,
@@ -307,6 +313,7 @@ pub const IO = struct {
         cancel_completion: *Completion,
     ) void {
         _ = self;
+        _ = config;
         _ = context;
         _ = callback;
         _ = completion;
@@ -632,9 +639,11 @@ pub const IO = struct {
 
     pub fn timeout(
         self: *IO,
+        comptime config: anytype,
         comptime Context: type,
         context: Context,
         comptime callback: fn (
+            comptime config: anytype,
             context: Context,
             completion: *Completion,
             result: TimeoutError!void,
@@ -652,7 +661,7 @@ pub const IO = struct {
                     fn on_complete(_io: *IO, _completion: *Completion) void {
                         _ = _io;
                         const _context: Context = @ptrCast(@alignCast(_completion.context));
-                        callback(_context, _completion, {});
+                        callback(config, _context, _completion, {});
                     }
                 }.on_complete,
             };
@@ -662,6 +671,7 @@ pub const IO = struct {
         }
 
         self.submit(
+            config,
             context,
             callback,
             completion,
